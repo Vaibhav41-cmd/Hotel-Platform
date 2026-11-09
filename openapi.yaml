@@ -1,0 +1,425 @@
+openapi: 3.1.0
+info:
+  title: Serein Stays API
+  version: 1.0.0
+  description: Boutique hotel discovery, booking, concierge enquiries and front-desk operations.
+servers:
+  - url: http://localhost:4000/api
+    description: Local development
+  - url: https://{apiHost}/api
+    description: Production API
+    variables:
+      apiHost:
+        default: your-api.onrender.com
+        description: Replace with the Render API hostname
+security: []
+tags:
+  - name: Health
+  - name: Authentication
+  - name: Properties
+  - name: Bookings
+  - name: Enquiries
+  - name: Front desk
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Readiness check
+      responses:
+        '200':
+          description: API is ready
+  /auth/signup:
+    post:
+      tags: [Authentication]
+      summary: Create a guest account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Signup' }
+      responses:
+        '201': { description: Guest account and access JWT created; refresh cookie set HttpOnly }
+        '400': { $ref: '#/components/responses/ApiError' }
+        '409': { $ref: '#/components/responses/ApiError' }
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Sign in and issue an access JWT plus a rotating refresh cookie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Login' }
+      responses:
+        '200': { description: Signed in; `serein_refresh` cookie is HttpOnly, Secure in production, and scoped to /api/auth }
+        '401': { $ref: '#/components/responses/ApiError' }
+  /auth/refresh:
+    post:
+      tags: [Authentication]
+      summary: Rotate the refresh cookie and return a new access JWT
+      responses:
+        '200': { description: Session refreshed }
+        '401': { $ref: '#/components/responses/ApiError' }
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Revoke the refresh token and clear the cookie
+      responses:
+        '200': { description: Signed out }
+  /auth/me:
+    get:
+      tags: [Authentication]
+      security: [{ bearerAuth: [] }]
+      summary: Return the signed-in user
+      responses:
+        '200': { description: Current user }
+        '401': { $ref: '#/components/responses/ApiError' }
+  /properties:
+    get:
+      tags: [Properties]
+      summary: Search the 14-property collection
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: Search hotel, neighbourhood, description and amenities }
+        - { name: city, in: query, schema: { type: string } }
+        - { name: neighborhood, in: query, schema: { type: string } }
+        - { name: checkIn, in: query, schema: { type: string, format: date } }
+        - { name: checkOut, in: query, schema: { type: string, format: date } }
+        - { name: guests, in: query, schema: { type: integer, minimum: 1, maximum: 8 } }
+        - { name: minPrice, in: query, schema: { type: number }, description: INR per night }
+        - { name: maxPrice, in: query, schema: { type: number }, description: INR per night }
+        - { name: amenities, in: query, schema: { type: string }, description: Comma-separated amenity phrases }
+        - { name: minRating, in: query, schema: { type: number, minimum: 1, maximum: 5 } }
+        - { name: sort, in: query, schema: { type: string, enum: [recommended, price-asc, rating, name] } }
+      responses:
+        '200': { description: Matching properties with INR room rates and date-aware availability }
+        '400': { $ref: '#/components/responses/ApiError' }
+  /properties/{slug}:
+    get:
+      tags: [Properties]
+      summary: Property detail, room inventory and recent guest reviews
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+        - { name: checkIn, in: query, schema: { type: string, format: date } }
+        - { name: checkOut, in: query, schema: { type: string, format: date } }
+        - { name: guests, in: query, schema: { type: integer, minimum: 1, maximum: 8 } }
+      responses:
+        '200': { description: Property detail }
+        '404': { $ref: '#/components/responses/ApiError' }
+  /properties/reviews:
+    post:
+      tags: [Properties]
+      security: [{ bearerAuth: [] }]
+      summary: Leave a guest review
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [propertyId, rating, title, comment]
+              properties:
+                propertyId: { type: string, format: uuid }
+                rating: { type: integer, minimum: 1, maximum: 5 }
+                title: { type: string, maxLength: 90 }
+                comment: { type: string, minLength: 10, maxLength: 1200 }
+      responses:
+        '201': { description: Review created }
+        '401': { $ref: '#/components/responses/ApiError' }
+  /bookings:
+    post:
+      tags: [Bookings]
+      security: [{ bearerAuth: [] }]
+      summary: Reserve an available room (server-calculated total, INR)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roomTypeId, checkIn, checkOut, guests]
+              properties:
+                roomTypeId: { type: string, format: uuid }
+                checkIn: { type: string, format: date }
+                checkOut: { type: string, format: date }
+                guests: { type: integer, minimum: 1, maximum: 8 }
+                guestName: { type: string }
+                guestEmail: { type: string, format: email }
+                guestPhone: { type: string }
+      responses:
+        '201': { description: Confirmed reservation }
+        '400': { $ref: '#/components/responses/ApiError' }
+        '409': { description: Room inventory changed before reservation could be committed }
+  /bookings/mine:
+    get:
+      tags: [Bookings]
+      security: [{ bearerAuth: [] }]
+      summary: List the current guest's reservations
+      responses:
+        '200': { description: Guest reservations }
+        '401': { $ref: '#/components/responses/ApiError' }
+  /bookings/{id}/cancel:
+    patch:
+      tags: [Bookings]
+      security: [{ bearerAuth: [] }]
+      summary: Cancel an eligible reservation (owner or admin)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Reservation cancelled }
+        '403': { $ref: '#/components/responses/ApiError' }
+        '409': { $ref: '#/components/responses/ApiError' }
+  /inquiries:
+    post:
+      tags: [Enquiries]
+      summary: Send a public concierge enquiry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, message]
+              properties:
+                name: { type: string, minLength: 2 }
+                email: { type: string, format: email }
+                phone: { type: string }
+                message: { type: string, minLength: 10, maxLength: 1500 }
+                checkIn: { type: string, format: date }
+                checkOut: { type: string, format: date }
+      responses:
+        '201': { description: Enquiry received; optional email job queued }
+        '400': { $ref: '#/components/responses/ApiError' }
+  /admin/metrics:
+    get:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Occupancy, ADR, RevPAR, property revenue, recent stays and import quality
+      parameters:
+        - { name: days, in: query, schema: { type: integer, enum: [7, 30, 90] }, description: Trailing reporting period; default 30 }
+      responses:
+        '200': { description: KPI data in INR }
+        '403': { $ref: '#/components/responses/ApiError' }
+  /admin/properties:
+    get:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: List properties and room inventory (admin)
+      responses:
+        '200': { description: Property list }
+    post:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Create a property
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PropertyWrite' }
+      responses:
+        '201': { description: Property created }
+  /admin/properties/{id}:
+    patch:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Update a property
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Property updated }
+    delete:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Delete a property with no stay history
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Property removed }
+        '409': { $ref: '#/components/responses/ApiError' }
+  /admin/room-types:
+    post:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Create room inventory (new rates are INR)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [propertyId, name, description, maxGuests, inventory, priceInr]
+              properties:
+                propertyId: { type: string, format: uuid }
+                name: { type: string }
+                description: { type: string }
+                maxGuests: { type: integer, minimum: 1, maximum: 8 }
+                inventory: { type: integer, minimum: 1 }
+                priceInr: { type: number, minimum: 1 }
+                amenities: { type: array, items: { type: string } }
+      responses:
+        '201': { description: Room type created }
+  /admin/room-types/{id}:
+    patch:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Update room type, inventory or price
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Room type updated }
+    delete:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Remove a room type without stay history
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Room type removed }
+  /admin/bookings:
+    get:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: List all reservations
+      responses:
+        '200': { description: Reservation list }
+  /admin/bookings/{id}:
+    patch:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Change reservation status
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Reservation updated }
+    delete:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Delete a reservation record
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Reservation deleted }
+  /admin/inquiries:
+    get:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: List concierge enquiries
+      responses:
+        '200': { description: Enquiry inbox }
+  /admin/inquiries/{id}:
+    patch:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Update enquiry workflow status
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [new, in_progress, resolved] }
+      responses:
+        '200': { description: Enquiry updated }
+  /admin/import-issues:
+    get:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: List quarantined legacy records
+      responses:
+        '200': { description: Import issues with original payloads }
+  /admin/import-issues/{id}:
+    patch:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Mark a legacy issue reviewed or reopen it
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolved]
+              properties:
+                resolved: { type: boolean }
+      responses:
+        '200': { description: Import issue updated }
+  /admin/reviews/{id}:
+    delete:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Remove a guest review
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Review removed }
+  /admin/upload:
+    post:
+      tags: [Front desk]
+      security: [{ bearerAuth: [] }]
+      summary: Upload a JPG, PNG or WebP property image (4 MB maximum)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image: { type: string, format: binary }
+      responses:
+        '201': { description: Uploaded image URL }
+        '400': { $ref: '#/components/responses/ApiError' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Signup:
+      type: object
+      required: [name, email, password]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 80 }
+        email: { type: string, format: email }
+        password: { type: string, minLength: 10, maxLength: 100 }
+    Login:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+    PropertyWrite:
+      type: object
+      required: [slug, name, description, address, neighborhood]
+      properties:
+        slug: { type: string, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' }
+        name: { type: string }
+        description: { type: string }
+        address: { type: string }
+        neighborhood: { type: string }
+        city: { type: string, default: Mumbai }
+        rating: { type: number, minimum: 1, maximum: 5 }
+        amenities: { type: array, items: { type: string } }
+        heroImage: { type: string }
+        featured: { type: boolean }
+  responses:
+    ApiError:
+      description: Consistent API error object
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: object
+                properties:
+                  code: { type: string }
+                  message: { type: string }
+                  details: { type: array, items: { type: object } }
+                  requestId: { type: string }

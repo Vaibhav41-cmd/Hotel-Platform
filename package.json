@@ -1,0 +1,21 @@
+{
+  "name": "serein-hotel-platform",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["client", "server"],
+  "scripts": {
+    "dev": "concurrently -n API,WEB -c magenta,cyan \"npm run dev --workspace=server\" \"npm run dev --workspace=client\"",
+    "build": "npm run build --workspace=client",
+    "test": "npm run test --workspace=server",
+    "db:generate": "npm run db:generate --workspace=server",
+    "db:validate": "npm exec --workspace=server -- prisma validate",
+    "db:deploy": "npm run db:deploy --workspace=server",
+    "db:seed": "npm run db:seed --workspace=server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20.19"
+  }
+}
